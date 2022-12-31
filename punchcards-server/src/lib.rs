@@ -2,9 +2,11 @@
 extern crate rocket;
 
 use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use punchcards_core::{CardPunch, CreateCard, CreatePerson, CreatePunch, FullCard, Person};
 use rocket::http::Status;
 use rocket::{routes, serde::json::Json, State};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use shuttle_service::{error::CustomError, ShuttleRocket};
 use sqlx::migrate::Migrator;
 use sqlx::types::chrono::{self, Utc};
@@ -22,17 +24,30 @@ struct Card {
     pub capacity: i32,
 }
 
-#[derive(Deserialize, Debug)]
-struct CreateCard {
-    pub title: String,
-    pub capacity: i32,
-}
-
 impl Card {
     pub async fn all_cards(pool: &PgPool) -> Result<Vec<Self>> {
         let cards: Vec<_> = sqlx::query_as("SELECT * FROM card").fetch_all(pool).await?;
 
         Ok(cards)
+    }
+
+    pub async fn delete(id: i32, pool: &PgPool) -> Result<()> {
+        let rows_affected = sqlx::query("DELETE FROM card WHERE card_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?
+            .rows_affected();
+
+        if rows_affected == 0 {
+            return Err(anyhow!("Delete didn't actually delete anything"));
+        }
+
+        sqlx::query("DELETE FROM punch WHERE card_id = $1")
+            .bind(id)
+            .execute(pool)
+            .await?;
+
+        Ok(())
     }
 
     pub async fn find_by_id(id: i32, pool: &PgPool) -> Result<Self> {
@@ -63,16 +78,14 @@ impl Card {
     }
 }
 
-#[derive(Serialize, Debug)]
-struct FullCard {
-    pub id: i32,
-    pub title: String,
-    pub capacity: i32,
-    pub punches: Vec<CardPunch>,
+#[async_trait]
+trait DBFullCard {
+    async fn all_cards(pool: &PgPool) -> Result<Vec<FullCard>>;
 }
 
-impl FullCard {
-    pub async fn all_cards(pool: &PgPool) -> Result<Vec<Self>> {
+#[async_trait]
+impl DBFullCard for FullCard {
+    async fn all_cards(pool: &PgPool) -> Result<Vec<FullCard>> {
         let cards = Card::all_cards(pool).await?;
         let punch_requests = cards.iter().map(|c| CardPunch::punches(c.id, pool));
 
@@ -92,35 +105,33 @@ impl FullCard {
     }
 }
 
-#[derive(Deserialize, Debug)]
-struct CreatePerson {
-    pub name: String,
-    pub email: Option<String>,
-    pub phone_number: Option<String>,
+#[async_trait]
+trait DBPerson {
+    async fn all_persons(pool: &PgPool) -> Result<Vec<Person>>;
+    async fn create(create: CreatePerson, pool: &PgPool) -> Result<Person>;
 }
 
-#[derive(Serialize, FromRow, Debug)]
-struct Person {
-    #[sqlx(rename = "person_id")]
-    pub id: i32,
-
-    #[sqlx(rename = "full_name")]
-    pub name: String,
-
-    pub email: Option<String>,
-    pub phone_number: Option<String>,
-}
-
-impl Person {
-    pub async fn all_persons(pool: &PgPool) -> Result<Vec<Self>> {
-        let people: Vec<_> = sqlx::query_as("SELECT * FROM person")
+#[async_trait]
+impl DBPerson for Person {
+    async fn all_persons(pool: &PgPool) -> Result<Vec<Person>> {
+        let rows = sqlx::query("SELECT person_id, full_name, email, phone_number FROM person")
             .fetch_all(pool)
             .await?;
+
+        let people: Vec<_> = rows
+            .into_iter()
+            .map(|r| Person {
+                id: r.get(0),
+                name: r.get(1),
+                email: r.get(2),
+                phone_number: r.get(3),
+            })
+            .collect();
 
         Ok(people)
     }
 
-    pub async fn create(create: CreatePerson, pool: &PgPool) -> Result<Self> {
+    async fn create(create: CreatePerson, pool: &PgPool) -> Result<Self> {
         let row = sqlx::query("INSERT INTO person (full_name, email, phone_number) VALUES ($1, $2, $3) RETURNING person_id")
             .bind(&create.name)
             .bind(&create.email)
@@ -137,14 +148,6 @@ impl Person {
 
         Ok(person)
     }
-}
-
-#[derive(Deserialize, Debug)]
-struct CreatePunch {
-    pub card_id: i32,
-    pub puncher_id: i32,
-    pub date: chrono::DateTime<Utc>,
-    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -205,16 +208,14 @@ impl Punch {
     }
 }
 
-#[derive(Serialize, Debug)]
-struct CardPunch {
-    pub id: i32,
-    pub puncher: Person,
-    pub date: chrono::DateTime<Utc>,
-    pub reason: String,
+#[async_trait]
+trait DBCardPunch {
+    async fn punches(card_id: i32, pool: &PgPool) -> Result<Vec<CardPunch>>;
 }
 
-impl CardPunch {
-    pub async fn punches(card_id: i32, pool: &PgPool) -> Result<Vec<CardPunch>> {
+#[async_trait]
+impl DBCardPunch for CardPunch {
+    async fn punches(card_id: i32, pool: &PgPool) -> Result<Vec<CardPunch>> {
         let rows = sqlx::query(
             "SELECT punch_id, date, reason, person_id, full_name, email, phone_number FROM punch JOIN person on puncher_id = person_id WHERE card_id = $1",
         )
@@ -277,6 +278,17 @@ async fn get_all_cards(state: &State<AppState>) -> Result<Json<Vec<FullCard>>, S
     }
 }
 
+#[delete("/<id>")]
+async fn delete_card(id: i32, state: &State<AppState>) -> Status {
+    match Card::delete(id, &state.pool).await {
+        Ok(_) => Status::NoContent,
+        e => {
+            tracing::error!("{:?}", e);
+            Status::NotFound
+        }
+    }
+}
+
 #[post("/", data = "<create>")]
 async fn post_card(
     create: Json<CreateCard>,
@@ -315,7 +327,7 @@ async fn rocket(#[shuttle_shared_db::Postgres] pool: PgPool) -> ShuttleRocket {
     let rocket = rocket::build()
         .mount("/person", routes![post_person])
         .mount("/persons", routes![get_all_persons])
-        .mount("/card", routes![post_card])
+        .mount("/card", routes![post_card, delete_card])
         .mount("/cards", routes![get_all_cards])
         .mount("/punch", routes![post_punch])
         .manage(state);
