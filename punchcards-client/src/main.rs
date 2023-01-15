@@ -4,8 +4,8 @@ use console::Term;
 use punchcards_core::{CreateCard, CreatePerson, CreatePunch, FullCard, Person};
 use std::io::Write;
 
-// const SERVER: &str = "https://punchcards-server.shuttleapp.rs";
-const SERVER: &str = "http://127.0.0.1:8000";
+const SERVER: &str = "https://punchcards-server.shuttleapp.rs";
+// const SERVER: &str = "http://127.0.0.1:8000";
 
 const MENU_WITH_NO_EXISTING: [&str; 2] = ["Create new", "Quit"];
 const MENU_WITH_EXISTING: [&str; 4] = ["Punch existing", "Create new", "Delete existing", "Quit"];
