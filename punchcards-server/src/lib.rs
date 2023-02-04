@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use punchcards_core::{CardPunch, CreateCard, CreatePerson, CreatePunch, FullCard, Person};
 use rocket::http::Status;
+use rocket::response::status::Custom;
 use rocket::{routes, serde::json::Json, State};
 use serde::Serialize;
 use shuttle_service::{error::CustomError, ShuttleRocket};
@@ -257,9 +258,9 @@ async fn get_all_persons(state: &State<AppState>) -> Result<Json<Vec<Person>>, S
 async fn post_person(
     create: Json<CreatePerson>,
     state: &State<AppState>,
-) -> Result<Json<Person>, Status> {
+) -> Result<Custom<Json<Person>>, Status> {
     match Person::create(create.0, &state.pool).await {
-        Ok(person) => Ok(Json(person)),
+        Ok(person) => Ok(Custom(Status::Created, Json(person))),
         Err(e) => {
             tracing::error!("{:?}", e);
             Err(Status::BadRequest)
@@ -293,9 +294,9 @@ async fn delete_card(id: i32, state: &State<AppState>) -> Status {
 async fn post_card(
     create: Json<CreateCard>,
     state: &State<AppState>,
-) -> Result<Json<Card>, Status> {
+) -> Result<Custom<Json<Card>>, Status> {
     match Card::create(create.0, &state.pool).await {
-        Ok(card) => Ok(Json(card)),
+        Ok(card) => Ok(Custom(Status::Created, Json(card))),
         e => {
             tracing::error!("{:?}", e);
             Err(Status::BadRequest)
@@ -307,9 +308,9 @@ async fn post_card(
 async fn post_punch(
     create: Json<CreatePunch>,
     state: &State<AppState>,
-) -> Result<Json<Punch>, Status> {
+) -> Result<Custom<Json<Punch>>, Status> {
     match Punch::create(create.0, &state.pool).await {
-        Ok(punch) => Ok(Json(punch)),
+        Ok(punch) => Ok(Custom(Status::Created, Json(punch))),
         e => {
             tracing::error!("{:?}", e);
             Err(Status::BadRequest)

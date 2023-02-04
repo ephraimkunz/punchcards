@@ -130,7 +130,7 @@ fn create_new_card() -> Result<()> {
     let create = CreateCard { title, capacity };
     let status = ureq::post(&format!("{SERVER}/card"))
         .send_json(create)?
-        .status();
+        .status();f
     if status != 200 {
         Term::stderr().write_line(&format!("Error creating card: {status}"))?;
     }
@@ -184,7 +184,7 @@ fn display_cards(cards: &[FullCard]) -> Result<()> {
                     card.capacity
                 )
             };
-            writeln!(Term::stdout(), "{}", title_line)?;
+            writeln!(Term::stdout(), "{title_line}")?;
 
             for punch in &card.punches {
                 let local_date: DateTime<Local> = DateTime::from(punch.date);
